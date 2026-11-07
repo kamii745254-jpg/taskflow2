@@ -3,8 +3,11 @@ import React, {
   createContext,
   useContext,
   useState,
+  useEffect,
   ReactNode,
 } from 'react';
+
+import { supabase } from '../lib/supabase';
 
 export type Task = {
   id: string;
@@ -58,43 +61,104 @@ type TaskContextType = {
 const TaskContext = createContext<TaskContextType | undefined>(undefined);
 
 export function TaskProvider({ children }: { children: ReactNode }) {
-  const [tasks, setTasks] = useState<Task[]>(initialTasks);
+  const [tasks, setTasks] = useState<Task[]>([]);
 
-  function addTask(task: NewTask) {
-    setTasks((previousTasks) => [
-      ...previousTasks,
-      {
-        ...task,
-        id: Date.now().toString(),
-        completed: false,
-      },
-    ]);
+  useEffect(() => {
+    let active = true;
+
+    async function loadTasks() {
+      const { data, error } = await supabase
+        .from('tasks')
+        .select('*');
+
+      if (error) {
+        console.error('Supabase fetch error:', error.message);
+        return;
+      }
+
+      if (!active) return;
+
+      if (data.length === 0) {
+        const { data: seededTasks, error: seedError } = await supabase
+          .from('tasks')
+          .insert(initialTasks)
+          .select();
+
+        if (seedError) {
+          console.error('Initial tasks error:', seedError.message);
+          return;
+        }
+
+        if (active) setTasks(seededTasks || []);
+      } else {
+        setTasks(data);
+      }
+    }
+
+    loadTasks();
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  async function addTask(task: NewTask) {
+    const { data, error } = await supabase
+      .from('tasks')
+      .insert([task])
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Add task error:', error.message);
+      return;
+    }
+
+    setTasks((previousTasks) => [...previousTasks, data]);
   }
 
-  function toggleTask(id: string) {
+  async function toggleTask(id: string) {
+    const currentTask = tasks.find((task) => task.id === id);
+
+    if (!currentTask) return;
+
+    const { data, error } = await supabase
+      .from('tasks')
+      .update({ completed: !currentTask.completed })
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Toggle task error:', error.message);
+      return;
+    }
+
     setTasks((previousTasks) =>
-      previousTasks.map((task) =>
-        task.id === id
-          ? { ...task, completed: !task.completed }
-          : task
-      )
+      previousTasks.map((task) => task.id === id ? data : task)
     );
   }
 
-  function updateTask(id: string, updatedTask: NewTask) {
+  async function updateTask(id: string, updatedTask: NewTask) {
+    const { data, error } = await supabase
+      .from('tasks')
+      .update(updatedTask)
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Update task error:', error.message);
+      return;
+    }
+
     setTasks((previousTasks) =>
-      previousTasks.map((task) =>
-        task.id === id
-          ? { ...task, ...updatedTask }
-          : task
-      )
+      previousTasks.map((task) => task.id === id ? data : task)
     );
   }
 
   return (
-    <TaskContext.Provider
-      value={{ tasks, addTask, toggleTask, updateTask }}
-    >
+    <TaskContext.Provider value={{ tasks, addTask, toggleTask, updateTask }}>
       {children}
     </TaskContext.Provider>
   );
